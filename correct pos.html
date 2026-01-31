@@ -1,0 +1,2003 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Ideal Food — POS (IndexedDB image + fallback storage) — UPDATED</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --brand:#ff6600; --brand-dark:#e05500; --bg:#f8f9fa; --panel:#fff;
+      --muted:#6c757d; --ok:#28a745; --info:#007bff; --red:#dc3545;
+      --shadow:0 6px 18px rgba(0,0,0,.08); --radius:12px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:#222;min-height:100vh}
+    header{background:#111;color:#fff;padding:14px 12px;text-align:center;border-bottom:4px solid var(--brand-dark)}
+    header h1{margin:0;font-size:20px}
+    .container{padding:12px}
+    .app{display:flex;gap:12px;padding:14px}
+    .left{flex:2 1 60%;padding:initial;background:var(--panel);border-right:2px solid #eee;min-width:300px}
+    .right{flex:1 1 40%;padding:initial;background:var(--panel);min-width:260px}
+    .btn{border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:600;box-shadow:var(--shadow)}
+    .btn.brand{background:var(--brand);color:#fff}
+    .btn.blue{background:var(--info);color:#fff}
+    .btn.green{background:var(--ok);color:#fff}
+    .btn.red{background:var(--red);color:#fff}
+    .btn.light{background:#f1f1f1;color:#222}
+    .btn.gray{background:var(--muted);color:#fff;display:none}
+    .btn.edit-fixed{background:#6c757d;color:#fff;;display:none}
+    .btn.edit-custom{background:#17a2b8;color:#fff;;display:none}
+    .btn.edit-deal{background:#9c27b0;color:#fff;;display:none}
+    .categories{display:flex;flex-wrap:wrap;gap:10px;padding:4px;margin-bottom:10px;overflow-x:auto}
+    .cat-btn{background:var(--brand);color:#fff;border:none;padding:8px 12px;border-radius:999px;white-space:nowrap;cursor:pointer}
+    .search{display:flex;gap:8px;margin-bottom:10px;align-items:center}
+    .search input{flex:1;padding:10px 12px;border-radius:10px;border:1px solid #ddd}
+    .products{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;overflow:auto;padding-right:6px;max-height:calc(100vh - 240px)}
+    .product-card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);padding:10px;text-align:center;display:flex;flex-direction:column;gap:8px;position:relative}
+    .product-card img{width:100%;height:150px;object-fit:cover;border-radius:10px;background:#eee}
+    .size-row{display:flex;gap:6px}
+    .size-row button{flex:1;padding:6px;border-radius:8px;border:0;background:var(--brand);color:#fff;cursor:pointer}
+    .size-row button:hover{background:var(--brand-dark)}
+    .panel{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);padding:12px}
+    .muted{color:var(--muted);font-size:12px}
+    .modal-backdrop{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:90}
+    .modal{width:360px;background:#fff;border-radius:12px;padding:12px;box-shadow:var(--shadow)}
+    .modal input, .modal select, .modal textarea{width:100%;padding:8px;border-radius:8px;border:1px solid #ddd;margin-bottom:8px}
+    .row{display:flex;gap:8px}
+    @media(max-width:1000px){.app{flex-direction:column}.products{max-height:40vh;grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}}
+    .receipt-preview{font-family:monospace;font-size:12px;white-space:pre;}
+    .paid-badge{background:#28a745;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px}
+    .unpaid-badge{background:#dc3545;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px}
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:8px">
+    <button id="historyBtn" class="btn light">📜 History</button>
+    <button id="adminToggle" class="btn light">🔒 Admin</button>
+    <button id="clearBillBtn" class="btn red">🧹 Clear Bill</button>
+  </div>
+
+  <div class="app">
+    <div class="left">
+      <div id="categories" class="categories"></div>
+
+      <div class="search">
+        <input id="searchInput" type="text" placeholder="Search products or deals...">
+        <button id="showAllBtn" class="btn brand">All Items</button>
+      </div>
+
+      <div id="products" class="products" aria-live="polite"></div>
+    </div>
+
+    <div class="right">
+      <div class="panel" style="margin-bottom:12px">
+        <h3 class="muted" style="margin:0 0 8px 0">BILL</h3>
+        <div id="billItems" style="min-height:160px;margin-bottom:8px"></div>
+
+        <textarea id="customerNote" placeholder="Note (e.g., extra salad, no onions)" style="width:100%;padding:8px;margin-bottom:8px;min-height:60px;border-radius:8px;border:1px solid #ddd;font-family:inherit"></textarea>
+        
+        <input id="customerName" placeholder="Customer Name" style="width:100%;padding:8px;margin-bottom:8px">
+        <input id="customerPhone" placeholder="Phone Number" style="width:100%;padding:8px;margin-bottom:8px">
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="btn blue order-type" data-ordertype="Takeaway">Takeaway</button>
+          <button class="btn green order-type" data-ordertype="Dine In">Dine In</button>
+          <button class="btn light order-type" data-ordertype="Delivery">Delivery</button>
+        </div>
+
+        <div id="addressWrap" style="display:none;margin-bottom:8px">
+          <input id="customerAddress" placeholder="Delivery Address" style="width:100%;padding:8px;margin-bottom:8px">
+          <input id="deliveryCharge" type="number" placeholder="Delivery Charges" min="0" style="width:100%;padding:8px;margin-bottom:8px">
+          <div class="muted">Tip: Customer details auto-fill next time by customer name or phone number.</div>
+        </div>
+
+        <input id="discount" type="number" placeholder="Discount (%)" min="0" max="100" style="width:100%;padding:8px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-weight:800">Total <span>Rs <span id="totalAmount">0</span></span></div>
+        <div style="margin-top:8px">
+          <button id="printBtn" class="btn brand" style="width:100%;">🖨 Save Bill (Unpaid)</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="muted">Quick note: Use Admin panel to add/edit products, deals, categories, and view sales.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- History panel -->
+<div id="historyDrawer" style="display:none;position:fixed;right:16px;top:56px;width:420px;height:80vh;background:#fff;border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,.12);z-index:999">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <h3 style="margin:0">Bill History</h3>
+    <button id="closeHistory" class="btn light">Close</button>
+  </div>
+  <div id="historyList" style="overflow:auto;max-height:calc(80vh - 80px)"></div>
+</div>
+
+<!-- Admin panel -->
+<div id="adminPanel" style="display:none;position:fixed;left:12px;bottom:12px;width:420px;background:#fff;border-radius:14px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:80vh;overflow:auto;z-index:1000">
+  <h3>Admin Panel</h3>
+
+  <div id="adminLogin">
+    <input id="adminName" placeholder="Admin username" style="width:100%;padding:8px;margin-bottom:8px">
+    <input id="adminPass" placeholder="Password" type="password" style="width:100%;padding:8px;margin-bottom:8px">
+    <button id="adminLoginBtn" class="btn brand" style="width:100%;margin-bottom:8px">Login</button>
+    <div id="adminMsg" class="muted"></div>
+  </div>
+
+  <div id="adminControls" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h4 style="margin:6px 0">Manage</h4>
+      <button id="adminLogoutBtn" class="btn light">Logout</button>
+    </div>
+
+    <h4 style="margin:6px 0">Add Category</h4>
+    <input id="newCategory" placeholder="Category name" style="width:100%;padding:8px;margin-bottom:8px">
+    <button id="addCategoryBtn" class="btn blue" style="width:100%;margin-bottom:12px">Add Category</button>
+
+    <h4 style="margin:10px 0 6px">Add Product (Fixed)</h4>
+    <input id="prodName" placeholder="Product name" style="width:100%;padding:8px;margin-bottom:8px">
+    <select id="prodCategory" style="width:100%;padding:8px;margin-bottom:8px"></select>
+    <input id="prodImg" type="file" accept="image/*" style="margin-bottom:8px">
+    <input id="priceSmall" type="number" placeholder="Small price" min="0" style="width:100%;padding:8px;margin-bottom:8px">
+    <input id="priceMedium" type="number" placeholder="Medium price" min="0" style="width:100%;padding:8px;margin-bottom:8px">
+    <input id="priceLarge" type="number" placeholder="Large price" min="0" style="width:100%;padding:8px;margin-bottom:8px">
+    <button id="addProductBtn" class="btn green" style="width:100%;margin-bottom:12px">Add Product</button>
+
+    <hr>
+
+    <h4 style="margin:10px 0 6px">Add Product (Custom price)</h4>
+    <input id="cProdName" placeholder="Product name" style="width:100%;padding:8px;margin-bottom:8px">
+    <select id="cProdCategory" style="width:100%;padding:8px;margin-bottom:8px"></select>
+    <input id="cProdImg" type="file" accept="image/*" style="margin-bottom:8px">
+    <div class="muted" style="font-size:12px;margin-bottom:6px">Enter plain numbers (e.g. <code>200</code>) or label-price (e.g. <code>500ml-200</code>).</div>
+    <input id="cPrice1" placeholder="e.g. 200 or 500ml-200" style="width:100%;padding:8px;margin-bottom:8px">
+    <input id="cPrice2" placeholder="e.g. 300 or 1kg-750" style="width:100%;padding:8px;margin-bottom:8px">
+    <input id="cPrice3" placeholder="e.g. 400" style="width:100%;padding:8px;margin-bottom:8px">
+    <button id="addCustomProductBtn" class="btn light" style="width:100%;margin-bottom:12px">Add Custom Product</button>
+
+    <hr>
+
+    <h4 style="margin:10px 0 6px">Add Deal</h4>
+    <input id="dealName" placeholder="Deal name" style="width:100%;padding:8px;margin-bottom:8px">
+    <textarea id="dealItems" rows="3" placeholder="Items — one per line: Name:Size or Name (Size)" style="width:100%;padding:8px;margin-bottom:8px"></textarea>
+    <select id="dealCategory" style="width:100%;padding:8px;margin-bottom:8px"></select>
+    <input id="dealPrice" type="number" placeholder="Deal price" min="0" style="width:100%;padding:8px;margin-bottom:8px">
+    <button id="addDealBtn" class="btn green" style="width:100%;margin-bottom:12px">Add Deal</button>
+
+    <hr>
+
+    <h4 style="margin:10px 0 6px">Remove</h4>
+    <select id="removeCategorySel" style="width:100%;padding:8px;margin-bottom:8px"></select>
+    <button id="removeCategoryBtn" class="btn red" style="width:100%;margin-bottom:12px">Remove Category</button>
+
+    <select id="removeProductSel" style="width:100%;padding:8px;margin-bottom:8px"></select>
+    <button id="removeProductBtn" class="btn red" style="width:100%;margin-bottom:12px">Remove Product</button>
+
+    <select id="removeDealSel" style="width:100%;padding:8px;margin-bottom:8px"></select>
+    <button id="removeDealBtn" class="btn red" style="width:100%;margin-bottom:12px">Remove Deal</button>
+
+    <hr>
+
+    <h4 style="margin:10px 0 6px">Sales (Admin — by Day)</h4>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <select id="salesYearSel" style="flex:1;padding:8px"></select>
+      <button id="showSalesBtn" class="btn blue">Show</button>
+    </div>
+    <div id="salesReport" style="max-height:220px;overflow:auto"></div>
+
+    <!-- Danger zone: Delete sales & history (admin only) -->
+    <hr>
+    <h4 style="margin:10px 0 6px">Danger Zone</h4>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button id="deleteSalesBtn" class="btn red" style="flex:1;display:none">🗑️ Delete Sales & History</button>
+      <button id="printDeleteSalesBtn" class="btn red" style="flex:1;display:none">🖨️🗑️ Print & Delete Sales</button>
+    </div>
+  </div>
+</div>
+
+<!-- Payment modal for unpaid bills -->
+<div id="paymentModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;z-index:9999">
+  <div style="background:#fff;padding:20px;border-radius:12px;width:400px;max-width:90%">
+    <h3 style="margin-top:0">Payment Collection</h3>
+    <div style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span>Total Bill:</span>
+        <span id="paymentTotal">0</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span>Amount Given:</span>
+        <input id="amountGiven" type="number" min="0" style="width:120px;padding:6px;text-align:right" placeholder="0">
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-weight:bold">
+        <span>Remaining/Change:</span>
+        <span id="remainingAmount">0</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="cancelPaymentBtn" class="btn light">Cancel</button>
+      <button id="confirmPaymentBtn" class="btn green">Mark as Paid</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Reason Modal -->
+<div id="deleteReasonModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;z-index:9999">
+  <div style="background:#fff;padding:20px;border-radius:12px;width:400px;max-width:90%">
+    <h3 style="margin-top:0">Delete Bill - Reason Required</h3>
+    <div style="margin-bottom:16px">
+      <p>Please provide a reason for deleting this bill:</p>
+      <textarea id="deleteReasonText" placeholder="Reason for deletion (e.g., wrong order, customer cancellation, etc.)" style="width:100%;padding:8px;border-radius:8px;border:1px solid #ddd;min-height:80px"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="cancelDeleteBtn" class="btn light">Cancel</button>
+      <button id="confirmDeleteBtn" class="btn red">Delete with Reason</button>
+    </div>
+  </div>
+</div>
+
+<!-- edit modal -->
+<div id="modalBackdrop" class="modal-backdrop" aria-hidden="true">
+  <div id="editModal" class="modal"></div>
+</div>
+
+<!-- deal editor modal -->
+<div id="deal-editor" style="display:none;position:fixed;inset:0;align-items:center;justify-content:center;background:rgba(0,0,0,0.4);z-index:9999">
+  <div style="background:#fff;padding:16px;border-radius:10px;max-width:520px;width:92%">
+    <h3 id="deal-editor-title">Edit Deal</h3>
+    <label>Name</label>
+    <input id="deal-editor-name" style="width:100%;padding:8px;margin-bottom:8px">
+    <label>Price (numeric)</label>
+    <input id="deal-editor-price" style="width:100%;padding:8px;margin-bottom:8px">
+    <label>Items (one per line — Name:Size or Name (Size))</label>
+    <textarea id="deal-editor-items" rows="6" style="width:100%;padding:8px;margin-bottom:12px"></textarea>
+    <div style="text-align:right">
+      <button onclick="closeDealEditor()" class="btn light">Cancel</button>
+      <button onclick="saveDealEditor()" class="btn green">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================
+   IndexedDB + localStorage fallback
+   ========================= */
+
+const IDB_DB_NAME = 'ideal_food_db';
+const IDB_DB_VERSION = 1;
+let idbDb = null;
+
+function idbOpen(){
+  return new Promise((resolve, reject) => {
+    if (idbDb) return resolve(idbDb);
+    const req = indexedDB.open(IDB_DB_NAME, IDB_DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('images')) db.createObjectStore('images', { keyPath: 'id', autoIncrement: true });
+      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+    };
+    req.onsuccess = (e) => { idbDb = e.target.result; resolve(idbDb); };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+function idbPutImage(blob){
+  return idbOpen().then(db => new Promise((resolve,reject) => {
+    const tx = db.transaction('images','readwrite');
+    const store = tx.objectStore('images');
+    const req = store.add({ blob });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = (ev) => reject(ev.target.error);
+  }));
+}
+function idbGetImage(id){
+  return idbOpen().then(db => new Promise((resolve,reject) => {
+    const tx = db.transaction('images','readonly');
+    const store = tx.objectStore('images');
+    const req = store.get(Number(id));
+    req.onsuccess = () => {
+      if (!req.result) return resolve(null);
+      resolve(req.result.blob);
+    };
+    req.onerror = (ev) => reject(ev.target.error);
+  }));
+}
+function idbSetMeta(key, value){
+  return idbOpen().then(db => new Promise((resolve,reject) => {
+    const tx = db.transaction('meta','readwrite');
+    const store = tx.objectStore('meta');
+    const req = store.put({ key, value });
+    req.onsuccess = () => resolve();
+    req.onerror = (ev) => reject(ev.target.error);
+  }));
+}
+function idbGetMeta(key){
+  return idbOpen().then(db => new Promise((resolve,reject) => {
+    const tx = db.transaction('meta','readonly');
+    const store = tx.objectStore('meta');
+    const req = store.get(key);
+    req.onsuccess = () => { resolve(req.result ? req.result.value : null); };
+    req.onerror = (ev) => reject(ev.target.error);
+  }));
+}
+
+/* =========================
+   Storage keys and seeds
+   ========================= */
+const LS_KEYS = {
+  PRODUCTS: "ideal_food_products",
+  CATEGORIES: "ideal_food_categories",
+  DEALS: "ideal_food_deals",
+  HISTORY: "ideal_food_history",
+  ADDRESS_BOOK: "ideal_food_address_book",
+  SALES: "ideal_food_sales_daily",
+  INVOICE_COUNTER: "ideal_food_invoice_counter",
+  DELETION_LOG: "ideal_food_deletion_log"
+};
+
+const seedCategories = ["All Items", "Fast Food", "Healthy", "Beverages"];
+const seedProducts = [
+  { name: "Tikka Pizza", category: "Fast Food", price:{ small:450, medium:700, large:1100 }, img:"", priceList:[] },
+  { name: "Zinger Burger", category: "Fast Food", price:{ small:270, medium:0, large:0 }, img:"", priceList:[] },
+  { name: "Fresh Salad", category: "Healthy", price:{ small:100, medium:200, large:300 }, img:"", priceList:[] },
+  { name: "Coke", category: "Beverages", price:{ small:50, medium:80, large:120 }, img:"", priceList:[] }
+];
+
+function lsGetSync(key, fallback){
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn('lsGetSync parse failed', key, e);
+    return fallback;
+  }
+}
+function lsSet(key, val){
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch (e) {
+    console.warn('localStorage.setItem failed for key', key, e, '— saving to IndexedDB meta instead.');
+    idbSetMeta(key, val).catch(err => console.error('idbSetMeta failed', err));
+  }
+}
+
+async function loadMetaFromIDB(){
+  try {
+    await idbOpen();
+    for (const k of Object.values(LS_KEYS)){
+      const v = await idbGetMeta(k);
+      if (v !== null && v !== undefined){
+        try { localStorage.setItem(k, JSON.stringify(v)); } catch(err) { /* ok */ }
+        if (k === LS_KEYS.CATEGORIES) categories = v;
+        if (k === LS_KEYS.PRODUCTS) products = v;
+        if (k === LS_KEYS.DEALS) deals = v;
+        if (k === LS_KEYS.HISTORY) historyData = v;
+        if (k === LS_KEYS.ADDRESS_BOOK) addressBook = v;
+        if (k === LS_KEYS.SALES) salesData = v;
+        if (k === LS_KEYS.INVOICE_COUNTER) invoiceCounter = v;
+        if (k === LS_KEYS.DELETION_LOG) deletionLog = v;
+      }
+    }
+  } catch (e) { console.warn('loadMetaFromIDB failed', e); }
+}
+
+/* =========================
+   Helpers & formatting
+   ========================= */
+const $ = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+function money(n){ return Number(n||0).toFixed(0); }
+function escapeHtml(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+function pad(n, digits=2){ return String(n).padStart(digits,'0'); }
+function formatDate(ts){
+  const d = (ts ? new Date(ts) : new Date());
+  return `${pad(d.getDate(),2)}/${pad(d.getMonth()+1,2)}/${d.getFullYear()}`;
+}
+function formatTime(ts){
+  const d = (ts ? new Date(ts) : new Date());
+  return `${pad(d.getHours(),2)}:${pad(d.getMinutes(),2)}:${pad(d.getSeconds(),2)}`;
+}
+function dayKeyFromTimestamp(ts){ return new Date(ts).toISOString().slice(0,10); }
+
+/* =========================
+   App state
+   ========================= */
+let categories = lsGetSync(LS_KEYS.CATEGORIES, seedCategories.slice());
+let products = lsGetSync(LS_KEYS.PRODUCTS, seedProducts.slice());
+let deals = lsGetSync(LS_KEYS.DEALS, []);
+let historyData = lsGetSync(LS_KEYS.HISTORY, []);
+let addressBook = lsGetSync(LS_KEYS.ADDRESS_BOOK, { byName: {}, byPhone: {} });
+let salesData = lsGetSync(LS_KEYS.SALES, {});
+let invoiceCounter = lsGetSync(LS_KEYS.INVOICE_COUNTER, Math.max(1, historyData.length + 1));
+let deletionLog = lsGetSync(LS_KEYS.DELETION_LOG, []);
+
+let bill = [];
+let currentCategory = "All Items";
+let orderType = "";
+let adminLoggedIn = false;
+
+let editingIndex = null;
+let editingOriginalEntry = null;
+let currentPaymentIndex = null;
+let currentDeleteIndex = null;
+
+/* =========================
+   Invoice number handling
+   ========================= */
+function getNextInvoiceNumber() {
+  let maxInvoice = 0;
+  historyData.forEach(entry => {
+    if (entry.invoice) {
+      const num = parseInt(entry.invoice.replace(/\D/g, ''));
+      if (!isNaN(num) && num > maxInvoice) {
+        maxInvoice = num;
+      }
+    }
+  });
+  
+  const nextNum = Math.max(maxInvoice + 1, invoiceCounter);
+  invoiceCounter = nextNum + 1;
+  lsSet(LS_KEYS.INVOICE_COUNTER, invoiceCounter);
+  
+  return String(nextNum).padStart(4, '0');
+}
+
+/* =========================
+   Render & admin helpers
+   ========================= */
+
+function renderCategories(){
+  const wrap = $("#categories"); wrap.innerHTML = "";
+  const prodSel = $("#prodCategory"), dealSel = $("#dealCategory"), cProdSel = $("#cProdCategory");
+  if(prodSel) prodSel.innerHTML = "";
+  if(dealSel) dealSel.innerHTML = "";
+  if(cProdSel) cProdSel.innerHTML = "";
+
+  categories.forEach(cat => {
+    const b = document.createElement('button'); b.className = 'cat-btn';
+    if (cat === currentCategory) b.style.opacity = 0.85;
+    b.textContent = cat;
+    b.onclick = () => { currentCategory = cat; $("#searchInput").value = ""; renderCategories(); renderProducts(); };
+    wrap.appendChild(b);
+
+    if (cat !== "All Items"){
+      if (prodSel){ const o=document.createElement('option'); o.value=cat; o.textContent=cat; prodSel.appendChild(o); }
+      if (dealSel){ const o=document.createElement('option'); o.value=cat; o.textContent=cat; dealSel.appendChild(o); }
+      if (cProdSel){ const o=document.createElement('option'); o.value=cat; o.textContent=cat; cProdSel.appendChild(o); }
+    }
+  });
+}
+
+function productMatches(p){
+  const q = ($("#searchInput")?.value || "").trim().toLowerCase();
+  const inCat = (currentCategory === "All Items") || (p.category === currentCategory);
+  const inSearch = !q || (p.name||"").toLowerCase().includes(q) || (p.category||"").toLowerCase().includes(q);
+  return inCat && inSearch;
+}
+function dealMatches(d){
+  const q = ($("#searchInput")?.value || "").trim().toLowerCase();
+  const inCat = (currentCategory === "All Items") || (d.category === currentCategory);
+  const inSearch = !q || (d.name||"").toLowerCase().includes(q) || (d.items && d.items.some(it => (it.name||"").toLowerCase().includes(q)));
+  return inCat && inSearch;
+}
+
+function loadImageToImgTag(p, imgEl){
+  if(!p || !p.img) return;
+  if (String(p.img).startsWith('idb://')){
+    const id = Number(p.img.replace('idb://',''));
+    idbGetImage(id).then(blob => {
+      if (!blob) { imgEl.alt = 'No Image'; return; }
+      const url = URL.createObjectURL(blob);
+      imgEl.src = url;
+    }).catch(err => {
+      console.warn('loadImageToImgTag failed', err);
+      imgEl.alt = 'No Image';
+    });
+  } else if (String(p.img).startsWith('data:') || String(p.img).startsWith('http') || String(p.img).startsWith('/')){
+    imgEl.src = p.img;
+  } else {
+    imgEl.alt = 'No Image';
+  }
+}
+
+function renderProducts(){
+  const cont = $("#products"); cont.innerHTML = "";
+
+  products.forEach((p, i) => {
+    if (!productMatches(p)) return;
+    if (!Array.isArray(p.priceList)) p.priceList = [];
+    if (!p.price) p.price = { small:0, medium:0, large:0 };
+
+    const card = document.createElement('div'); card.className = 'product-card';
+    const imgTag = document.createElement('img');
+    if (p.img){
+      imgTag.alt = 'Loading...';
+      loadImageToImgTag(p, imgTag);
+    } else {
+      imgTag.alt = 'No Image';
+      imgTag.style.background = '#eee';
+    }
+
+    const title = document.createElement('div'); title.style.fontWeight='700'; title.textContent = p.name || '';
+    const muted = document.createElement('div'); muted.className='muted'; muted.textContent = p.category || '';
+    card.appendChild(imgTag);
+    card.appendChild(title);
+    card.appendChild(muted);
+
+    const row = document.createElement('div'); row.className = 'size-row';
+
+    if (p.priceList && p.priceList.length > 0){
+      p.priceList.forEach(pl => {
+        if(!pl || isNaN(pl.price) || pl.price <= 0) return;
+        const btn = document.createElement('button');
+        btn.textContent = `${pl.label} Rs ${money(pl.price)}`;
+        btn.onclick = () => addToBill(p.name, pl.label, Number(pl.price));
+        row.appendChild(btn);
+      });
+    } else {
+      if (Number(p.price.small) > 0){
+        const b = document.createElement('button'); b.textContent = `S  ${money(p.price.small)}`; b.onclick = () => addToBill(p.name, 'Small', Number(p.price.small)); row.appendChild(b);
+      }
+      if (Number(p.price.medium) > 0){
+        const b = document.createElement('button'); b.textContent = `M  ${money(p.price.medium)}`; b.onclick = () => addToBill(p.name, 'Medium', Number(p.price.medium)); row.appendChild(b);
+      }
+      if (Number(p.price.large) > 0){
+        const b = document.createElement('button'); b.textContent = `L  ${money(p.price.large)}`; b.onclick = () => addToBill(p.name, 'Large', Number(p.price.large)); row.appendChild(b);
+      }
+    }
+
+    if (row.children.length > 0) card.appendChild(row);
+
+    const editWrap = document.createElement('div'); editWrap.style.marginTop='6px';
+    if (p.priceList && p.priceList.length > 0){
+      const btn = document.createElement('button'); btn.className='btn edit-custom'; btn.textContent='✏ '; btn.onclick = () => openEditCustomProduct(i); editWrap.appendChild(btn);
+    } else {
+      const btn = document.createElement('button'); btn.className='btn edit-fixed'; btn.textContent='✏'; btn.onclick = () => openEditProduct(i); editWrap.appendChild(btn);
+    }
+    card.appendChild(editWrap);
+
+    cont.appendChild(card);
+  });
+
+  deals.filter(dealMatches).forEach(d => {
+    const card = document.createElement('div'); card.className = 'product-card';
+    const itemsText = (d.items||[]).map(it => `${it.name}${it.size?` (${it.size})`:''}`).join(", ");
+    const title = document.createElement('div'); title.style.fontWeight='700'; title.textContent = d.name || '';
+    const muted = document.createElement('div'); muted.className='muted'; muted.textContent = `Deal: ${itemsText}`;
+    card.appendChild(title); card.appendChild(muted);
+    const btnRow = document.createElement('div'); btnRow.style.display='flex'; btnRow.style.justifyContent='center'; btnRow.style.gap='8px'; btnRow.style.marginTop='8px';
+    const addBtn = document.createElement('button'); addBtn.className='btn brand'; addBtn.textContent=`Rs ${money(d.price)}`; addBtn.onclick = ()=> addDealToBill(d.name);
+    const editBtn = document.createElement('button'); editBtn.className='btn edit-deal'; editBtn.textContent='✏ '; editBtn.onclick = ()=> openDealEditor(d.name);
+    btnRow.appendChild(addBtn); btnRow.appendChild(editBtn);
+    card.appendChild(btnRow);
+    cont.appendChild(card);
+  });
+
+  if (cont.children.length === 0) cont.innerHTML = '<div class="muted" style="padding:12px">No products or deals found for this search/category.</div>';
+}
+
+/* =========================
+   File upload helper
+   ========================= */
+function handleFileUpload(input, productIndex){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  idbPutImage(file).then(id => {
+    products[productIndex].img = 'idb://' + id;
+    lsSet(LS_KEYS.PRODUCTS, products);
+    renderProducts();
+  }).catch(err => {
+    console.error('handleFileUpload idbPutImage failed', err);
+    const reader = new FileReader();
+    reader.onload = e => {
+      products[productIndex].img = e.target.result;
+      lsSet(LS_KEYS.PRODUCTS, products);
+      renderProducts();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* =========================
+   Edit product / custom product flows
+   ========================= */
+function openEditProduct(index){
+  const p = products[index]; if(!p) return;
+  const modal = $("#editModal");
+  modal.innerHTML = `
+    <h3>Edit Prices — ${escapeHtml(p.name)}</h3>
+    <div class="muted">Leave blank to keep current price.</div>
+    <input id="editSmall" type="number" placeholder="Small price" value="${p.price?.small ?? ''}">
+    <input id="editMedium" type="number" placeholder="Medium price" value="${p.price?.medium ?? ''}">
+    <input id="editLarge" type="number" placeholder="Large price" value="${p.price?.large ?? ''}">
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn green" onclick="saveEditProduct(${index})">Save</button>
+      <button class="btn light" onclick="closeEditModal()">Cancel</button>
+    </div>
+  `;
+  $("#modalBackdrop").style.display = 'flex';
+}
+function saveEditProduct(index){
+  const p = products[index]; if(!p) return;
+  const sRaw = $("#editSmall")?.value, mRaw = $("#editMedium")?.value, lRaw = $("#editLarge")?.value;
+  p.price = {
+    small: (sRaw === "" || sRaw == null) ? (p.price?.small || 0) : parseFloat(sRaw),
+    medium: (mRaw === "" || mRaw == null) ? (p.price?.medium || 0) : parseFloat(mRaw),
+    large: (lRaw === "" || lRaw == null) ? (p.price?.large || 0) : parseFloat(lRaw)
+  };
+  products[index] = p;
+  lsSet(LS_KEYS.PRODUCTS, products);
+  renderProducts(); populateAdminSelects(); closeEditModal();
+}
+
+function openEditCustomProduct(index){
+  const p = products[index]; if(!p) return;
+  const modal = $("#editModal");
+  let rows = "";
+  (p.priceList || []).forEach((pl,i) => {
+    rows += `<div style="display:flex;gap:8px;margin-bottom:6px">
+      <input id="editLabel${i}" placeholder="Label (e.g. 500ml or 200)" value="${escapeHtml(pl.label)}">
+      <input id="editPrice${i}" type="number" placeholder="Price" min="0" value="${pl.price}">
+    </div>`;
+  });
+  rows += `<div style="display:flex;gap:8px;margin-bottom:6px">
+    <input id="newLabel" placeholder="New label (or price)">
+    <input id="newPrice" type="number" placeholder="New price" min="0">
+  </div>`;
+  modal.innerHTML = `<h3>Edit Custom Prices — ${escapeHtml(p.name)}</h3><div class="muted">Edit existing rows or add a new one. Label can be numeric or text.</div>${rows}
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn green" onclick="saveEditCustomProduct(${index})">Save</button>
+      <button class="btn light" onclick="closeEditModal()">Cancel</button>
+    </div>`;
+  $("#modalBackdrop").style.display = 'flex';
+}
+function saveEditCustomProduct(index){
+  const p = products[index]; if(!p) return;
+  const newList = [];
+  for(let i=0;i < (p.priceList?.length || 0); i++){
+    const label = $("#editLabel"+i)?.value?.trim();
+    const price = Number($("#editPrice"+i)?.value);
+    if(label && !isNaN(price) && price > 0) newList.push({ label, price });
+  }
+  const newLabel = $("#newLabel")?.value?.trim();
+  const newPrice = Number($("#newPrice")?.value);
+  if (newLabel && !isNaN(newPrice) && newPrice > 0) newList.push({ label: newLabel, price: Math.round(newPrice) });
+
+  if (newList.length === 0){
+    if (!confirm("No custom prices left — product will have no price buttons. Continue?")) return;
+  }
+
+  products[index].priceList = newList;
+  lsSet(LS_KEYS.PRODUCTS, products);
+  renderProducts(); populateAdminSelects(); closeEditModal();
+}
+function closeEditModal(){ $("#modalBackdrop").style.display = 'none'; $("#editModal").innerHTML = ''; }
+
+/* =========================
+   Bill operations with Coke exclusion for discount
+   ========================= */
+function addToBill(name, size, price){
+  const found = bill.find(x => x.name === name && x.size === size && x.price === price);
+  if (found) found.qty += 1; else bill.push({ name, size, price, qty:1 });
+  updateBill();
+}
+function addDealToBill(dealName){
+  const d = deals.find(x => x.name === dealName); if(!d) return;
+  const found = bill.find(x => x.name === d.name && x.size === 'Deal');
+  if (found) found.qty += 1; else bill.push({ name: d.name, size: 'Deal', price: d.price, qty:1 });
+  updateBill();
+}
+function changeQty(idx, delta){
+  if (!bill[idx]) return;
+  bill[idx].qty += delta;
+  if (bill[idx].qty <= 0) bill.splice(idx,1);
+  updateBill();
+}
+function removeLine(idx){ bill.splice(idx,1); updateBill(); }
+
+function updateBill(){
+  const box = $("#billItems"); box.innerHTML = '';
+  if (!bill.length){ box.innerHTML = '<div class="muted">No items yet — add products from the left.</div>'; $("#totalAmount").textContent = '0'; return; }
+  let itemsTotal = 0;
+  let nonCokeTotal = 0;
+  
+  bill.forEach((it, idx) => {
+    const lineTotal = it.qty * it.price;
+    itemsTotal += lineTotal;
+    
+    if (!it.name.toLowerCase().includes('coke')) {
+      nonCokeTotal += lineTotal;
+    }
+    
+    const row = document.createElement('div');
+    row.style.display = 'grid'; row.style.gridTemplateColumns = '1fr 90px 80px 30px'; row.style.alignItems='center'; row.style.gap='8px'; row.style.padding='6px 0'; row.style.borderBottom='1px dashed #eee';
+    row.innerHTML = `<div><strong>${escapeHtml(it.name)}</strong><div class="muted">${escapeHtml(it.size)}</div></div>
+      <div style="text-align:center"><button class="btn light" onclick="changeQty(${idx},-1)">-</button><span style="padding:0 8px">${it.qty}</span><button class="btn light" onclick="changeQty(${idx},1)">+</button></div>
+      <div style="text-align:right">Rs ${money(lineTotal)}</div>
+      <div style="text-align:center"><button class="btn light" onclick="removeLine(${idx})">×</button></div>`;
+    box.appendChild(row);
+  });
+
+  const discount = Number($("#discount")?.value) || 0;
+  const delivery = Number($("#deliveryCharge")?.value) || 0;
+  
+  const discountAmt = Math.round(nonCokeTotal * (discount / 100));
+  const finalTotal = Math.max(0, Math.round(itemsTotal - discountAmt + delivery));
+  
+  $("#totalAmount").textContent = money(finalTotal);
+}
+
+/* =========================
+   Add / edit products & deals
+   ========================= */
+function addProduct(){
+  const name = $("#prodName")?.value?.trim();
+  const cat = $("#prodCategory")?.value;
+  const small = Number($("#priceSmall")?.value) || 0;
+  const medium = Number($("#priceMedium")?.value) || 0;
+  const large = Number($("#priceLarge")?.value) || 0;
+  const imgInput = $("#prodImg");
+  if (!name) return alert("Product name required");
+  if (!cat) return alert("Category required");
+  const newProd = { name, category: cat, price: { small, medium, large }, img: "", priceList: [] };
+  if (imgInput && imgInput.files && imgInput.files[0]) {
+    const file = imgInput.files[0];
+    idbPutImage(file).then(id => {
+      newProd.img = 'idb://' + id;
+      products.push(newProd);
+      lsSet(LS_KEYS.PRODUCTS, products);
+      renderProducts(); populateAdminSelects();
+      $("#prodName").value=''; $("#priceSmall").value=''; $("#priceMedium").value=''; $("#priceLarge").value=''; imgInput.value='';
+    }).catch(err => {
+      console.error('idbPutImage failed', err);
+      const reader = new FileReader();
+      reader.onload = e => {
+        newProd.img = e.target.result;
+        products.push(newProd); lsSet(LS_KEYS.PRODUCTS, products); renderProducts(); populateAdminSelects();
+      };
+      reader.readAsDataURL(file);
+    });
+  } else {
+    products.push(newProd); lsSet(LS_KEYS.PRODUCTS, products); renderProducts(); populateAdminSelects();
+    $("#prodName").value=''; $("#priceSmall").value=''; $("#priceMedium").value=''; $("#priceLarge").value=''; if (imgInput) imgInput.value='';
+  }
+}
+
+function addCustomProduct(){
+  const name = $("#cProdName")?.value?.trim();
+  const cat = $("#cProdCategory")?.value;
+  const imgInput = $("#cProdImg");
+  if (!name) return alert("Product name required");
+  if (!cat) return alert("Category required");
+  const raw = [ $("#cPrice1")?.value, $("#cPrice2")?.value, $("#cPrice3")?.value ];
+  const priceList = [];
+  raw.forEach(v => {
+    if (!v) return;
+    const s = String(v).trim();
+    if (s.includes('-')){
+      const parts = s.split('-'); const price = Number(parts[parts.length-1]); const label = parts.slice(0,parts.length-1).join('-').trim();
+      if (label && !isNaN(price) && price > 0) priceList.push({ label, price: Math.round(price) });
+    } else {
+      const num = Number(s);
+      if (!isNaN(num) && num > 0) priceList.push({ label: String(Math.round(num)), price: Math.round(num) });
+    }
+  });
+  if (!priceList.length) return alert("Enter at least one valid price (e.g. 200 or 500ml-200)");
+  const newProd = { name, category: cat, img: "", price: { small:0, medium:0, large:0 }, priceList };
+  if(imgInput && imgInput.files && imgInput.files[0]){
+    const file = imgInput.files[0];
+    idbPutImage(file).then(id => {
+      newProd.img = 'idb://' + id;
+      products.push(newProd); lsSet(LS_KEYS.PRODUCTS, products); renderProducts(); populateAdminSelects();
+      $("#cProdName").value=''; $("#cPrice1").value=''; $("#cPrice2").value=''; $("#cPrice3").value=''; imgInput.value='';
+    }).catch(err => {
+      console.error('idbPutImage failed', err);
+      const reader = new FileReader();
+      reader.onload = e => {
+        newProd.img = e.target.result;
+        products.push(newProd); lsSet(LS_KEYS.PRODUCTS, products); renderProducts(); populateAdminSelects();
+      };
+      reader.readAsDataURL(file);
+    });
+  } else {
+    products.push(newProd); lsSet(LS_KEYS.PRODUCTS, products); renderProducts(); populateAdminSelects();
+    $("#cProdName").value=''; $("#cPrice1").value=''; $("#cPrice2").value=''; $("#cPrice3").value=''; if(imgInput) imgInput.value='';
+  }
+}
+
+function addDeal(){
+  const name = $("#dealName")?.value?.trim();
+  const itemsRaw = $("#dealItems")?.value?.trim();
+  const cat = $("#dealCategory")?.value;
+  const price = Number($("#dealPrice")?.value) || 0;
+  if (!name) return alert("Deal name required");
+  if (!itemsRaw) return alert("Deal items required");
+  if (!cat) return alert("Category required");
+  if (price <= 0) return alert("Deal price required");
+  const items = itemsRaw.split(/\r?\n|,/).map(s=>s.trim()).filter(Boolean).map(line=>{
+    const colon = line.split(':'); if (colon.length>=2) return { name: colon[0].trim(), size: colon.slice(1).join(':').trim() };
+    const m = line.match(/^(.*)\s*\((.*)\)$/); if (m) return { name: m[1].trim(), size: m[2].trim() };
+    return { name: line.trim() };
+  });
+  if (!items.length) return alert("No items parsed");
+  deals.push({ name, items, price, category: cat }); lsSet(LS_KEYS.DEALS, deals); renderProducts(); populateAdminSelects();
+  $("#dealName").value=''; $("#dealItems").value=''; $("#dealPrice").value='';
+}
+
+/* =========================
+   Deal editor functions
+   ========================= */
+let editingDealName = null;
+function openDealEditor(dealName){
+  editingDealName = dealName;
+  const d = deals.find(x=>x.name === dealName);
+  if(!d){ alert("Deal not found."); return; }
+  document.getElementById('deal-editor-title').textContent = `Edit Deal — ${d.name || ''}`;
+  document.getElementById('deal-editor-name').value = d.name || '';
+  document.getElementById('deal-editor-price').value = (d.price != null) ? d.price : '';
+  const itemsText = (d.items || []).map(it => it.size ? `${it.name}:${it.size}` : `${it.name}`).join("\n");
+  document.getElementById('deal-editor-items').value = itemsText;
+  document.getElementById('deal-editor').style.display = 'flex';
+}
+function closeDealEditor(){ document.getElementById('deal-editor').style.display = 'none'; editingDealName = null; }
+function saveDealEditor(){
+  if(!editingDealName) return;
+  const name = document.getElementById('deal-editor-name').value.trim();
+  const priceVal = document.getElementById('deal-editor-price').value.trim();
+  const itemsRaw = document.getElementById('deal-editor-items').value.trim();
+  if(!name){ alert('Deal name cannot be empty.'); return; }
+  const price = priceVal === '' ? null : parseFloat(priceVal);
+  if(priceVal !== '' && isNaN(price)){ alert('Please enter a valid numeric price.'); return; }
+  const items = itemsRaw ? _parseDealItemsText(itemsRaw) : [];
+  const idx = deals.findIndex(x => x.name === editingDealName);
+  if(idx === -1){ alert('Deal not found (it may have been renamed).'); closeDealEditor(); return; }
+  if(name !== editingDealName && deals.some((d, i) => d.name === name && i !== idx)){
+    if(!confirm('Another deal with this name already exists. Rename anyway?')) return;
+  }
+  deals[idx].name = name;
+  if(price !== null) deals[idx].price = price;
+  deals[idx].items = items;
+  lsSet(LS_KEYS.DEALS, deals);
+  renderProducts();
+  populateAdminSelects();
+  closeDealEditor();
+  alert('Deal updated.');
+}
+function _parseDealItemsText(itemsStr){
+  const lines = itemsStr.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+  const items = lines.map(line => {
+    const colon = line.split(':');
+    if(colon.length >= 2){
+      return { name: colon[0].trim(), size: colon.slice(1).join(':').trim() };
+    }
+    const m = line.match(/^(.*)\s*\((.*)\)\s*$/);
+    if(m) return { name: m[1].trim(), size: m[2].trim() };
+    return { name: line.trim() };
+  });
+  return items.filter(x => x.name);
+}
+
+/* =========================
+   PRINT & SAVE BILL - ALL BILLS SAVED AS UNPAID BY DEFAULT
+   ========================= */
+function getNextInvoiceAndSave(){
+  const invStr = getNextInvoiceNumber();
+  return invStr;
+}
+
+function saveCustomerToAddressBook(name, phone, address, deliveryCharge){
+  if (!name) return;
+  addressBook.byName = addressBook.byName || {};
+  addressBook.byPhone = addressBook.byPhone || {};
+  addressBook.byName[name] = { phone: phone || "", address: address || "", deliveryCharge: Number(deliveryCharge) || 0 };
+  if (phone) addressBook.byPhone[phone] = name;
+  lsSet(LS_KEYS.ADDRESS_BOOK, addressBook);
+}
+
+/* =========================
+   Enhanced Sales Tracking by Category
+   ========================= */
+function adjustSalesForEntry(entry, multiplier = 1){
+  if (!entry || !entry.items || !entry.paid) return;
+  
+  const dayKey = entry.paymentDate || dayKeyFromTimestamp(entry.timestamp || Date.now());
+  if (!salesData || typeof salesData !== 'object') salesData = {};
+  if (!salesData[dayKey]) salesData[dayKey] = { categories: {}, special: {} };
+  
+  let nonCokeTotal = 0;
+  entry.items.forEach(it => {
+    if (!it.name.toLowerCase().includes('coke')) {
+      nonCokeTotal += (Number(it.qty) || 0) * (Number(it.price) || 0);
+    }
+  });
+  
+  const discountAmount = Math.round(nonCokeTotal * ((entry.discount || 0) / 100));
+  
+  // Process items and group by category
+  entry.items.forEach(it => {
+    const name = it.name || 'Unknown';
+    const value = (Number(it.qty) || 0) * (Number(it.price) || 0);
+    if (value <= 0) return;
+    
+    // Find product category
+    let category = "Uncategorized";
+    const product = products.find(p => p.name === name);
+    if (product && product.category) {
+      category = product.category;
+    } else {
+      // Check if it's a deal
+      const deal = deals.find(d => d.name === name);
+      if (deal && deal.category) {
+        category = deal.category;
+      }
+    }
+    
+    // Initialize category if not exists
+    if (!salesData[dayKey].categories[category]) {
+      salesData[dayKey].categories[category] = {};
+    }
+    
+    // Add to category item
+    salesData[dayKey].categories[category][name] = (salesData[dayKey].categories[category][name] || 0) + multiplier * value;
+    
+    // Remove if zero or negative
+    if (salesData[dayKey].categories[category][name] <= 0) {
+      delete salesData[dayKey].categories[category][name];
+    }
+    
+    // Remove empty category
+    if (Object.keys(salesData[dayKey].categories[category]).length === 0) {
+      delete salesData[dayKey].categories[category];
+    }
+  });
+  
+  // Handle Discount (as negative amount)
+  if (discountAmount > 0) {
+    salesData[dayKey].special["Discount"] = (salesData[dayKey].special["Discount"] || 0) - multiplier * discountAmount;
+  }
+  
+  // Handle Delivery Charge
+  if (entry.deliveryCharge && entry.deliveryCharge > 0) {
+    salesData[dayKey].special["Delivery Charge"] = (salesData[dayKey].special["Delivery Charge"] || 0) + multiplier * entry.deliveryCharge;
+  }
+  
+  // Clean up zero values in special
+  Object.keys(salesData[dayKey].special || {}).forEach(key => {
+    if (Math.abs(salesData[dayKey].special[key]) < 0.01) delete salesData[dayKey].special[key];
+  });
+  
+  // Clean up empty special object
+  if (Object.keys(salesData[dayKey].special || {}).length === 0) {
+    delete salesData[dayKey].special;
+  }
+  
+  // Keep only last 365 days
+  try {
+    const keys = Object.keys(salesData).sort().reverse();
+    const keep = new Set(keys.slice(0, 365));
+    const newSales = {};
+    keys.forEach(k => { if (keep.has(k)) newSales[k] = salesData[k]; });
+    salesData = newSales;
+  } catch(e) { console.warn('sales prune failed', e); }
+  
+  lsSet(LS_KEYS.SALES, salesData);
+}
+
+function recordSales(items, discountPercent, deliveryCharge){
+  if (!items || !items.length) return;
+  const entry = { items, discount: discountPercent, deliveryCharge, timestamp: Date.now() };
+  adjustSalesForEntry(entry, +1);
+}
+
+function printBill(){
+  if (!bill || bill.length === 0) return alert("No items in bill!");
+
+  if ($("#discount").value === "" || $("#discount").value == null) $("#discount").value = "0";
+
+  const customerName = $("#customerName").value.trim();
+  const customerPhone = $("#customerPhone").value.trim();
+  const customerAddress = $("#customerAddress").value.trim();
+  const discountPercent = Number($("#discount").value) || 0;
+  const deliveryCharge = Number($("#deliveryCharge")?.value) || 0;
+  const customerNote = $("#customerNote").value.trim();
+
+  let itemsTotal = 0;
+  let nonCokeTotal = 0;
+  bill.forEach(it => {
+    const lineTotal = it.qty * it.price;
+    itemsTotal += lineTotal;
+    if (!it.name.toLowerCase().includes('coke')) {
+      nonCokeTotal += lineTotal;
+    }
+  });
+  
+  const discountAmount = Math.round(nonCokeTotal * discountPercent / 100);
+  const finalTotal = Math.round(itemsTotal - discountAmount + deliveryCharge);
+
+  const now = Date.now();
+  const invoiceForThis = (editingIndex !== null && historyData[editingIndex] && historyData[editingIndex].invoice) ? historyData[editingIndex].invoice : getNextInvoiceAndSave();
+
+  if (editingIndex !== null && historyData[editingIndex]){
+    try {
+      if (editingOriginalEntry && editingOriginalEntry.paid) {
+        adjustSalesForEntry(editingOriginalEntry, -1);
+      }
+    } catch (e) { console.warn('Failed to subtract original sales during edit', e); }
+
+    const wasPaid = historyData[editingIndex].paid;
+    historyData[editingIndex] = {
+      customerName,
+      customerPhone,
+      customerAddress,
+      customerNote,
+      orderType,
+      items: JSON.parse(JSON.stringify(bill)),
+      total: finalTotal,
+      discount: discountPercent,
+      discountAmount,
+      deliveryCharge,
+      paid: wasPaid,
+      timestamp: now,
+      invoice: invoiceForThis
+    };
+    lsSet(LS_KEYS.HISTORY, historyData);
+
+    if (wasPaid) {
+      try { recordSales(bill, discountPercent, deliveryCharge); } catch (e) { console.warn("recordSales failed on edit", e); }
+    }
+
+    editingIndex = null;
+    editingOriginalEntry = null;
+  } else {
+    const newEntry = {
+      customerName,
+      customerPhone,
+      customerAddress,
+      customerNote,
+      orderType,
+      items: JSON.parse(JSON.stringify(bill)),
+      total: finalTotal,
+      discount: discountPercent,
+      discountAmount,
+      deliveryCharge,
+      paid: false,
+      timestamp: now,
+      invoice: invoiceForThis
+    };
+    historyData.push(newEntry);
+    lsSet(LS_KEYS.HISTORY, historyData);
+
+    if (orderType === "Delivery" && deliveryCharge > 0) {
+      saveCustomerToAddressBook(customerName, customerPhone, customerAddress, deliveryCharge);
+    }
+  }
+
+  if (customerName){
+    saveCustomerToAddressBook(customerName, customerPhone, customerAddress, deliveryCharge);
+  }
+
+  renderHistory();
+  populateAdminSelects();
+
+  const nameHTML = customerName ? `<div>Customer Name: ${escapeHtml(customerName)}</div>` : "";
+  const phoneHTML = customerPhone ? `<div>Phone: ${escapeHtml(customerPhone)}</div>` : "";
+  const addressHTML = customerAddress ? `<div>Address: ${escapeHtml(customerAddress)}</div>` : "";
+  const discountHTML = discountAmount > 0 ? `<div>Discount: ${money(discountPercent)}% (Rs ${money(discountAmount)})</div>` : "";
+  const deliveryHTML = deliveryCharge > 0 ? `<div>Delivery: Rs ${money(deliveryCharge)}</div>` : "";
+  const noteHTML = customerNote ? `<div>Note: ${escapeHtml(customerNote)}</div>` : "";
+  
+  const statusHTML = `<div style="text-align:center;color:#dc3545;font-weight:bold;margin:8px 0">UNPAID BILL</div>`;
+
+  const itemsHtml = bill.map(item => {
+    const desc = `${item.name}${item.size && item.size !== 'Deal' ? ' (' + item.size + ')' : ''}`;
+    const qty = Number(item.qty);
+    const price = Number(item.qty) * Number(item.price);
+    return `<tr>
+      <td style="padding:3px 0">${escapeHtml(desc)}</td>
+      <td style="width:40px;text-align:center;padding:3px 0">${qty}</td>
+      <td style="width:80px;text-align:right;padding:3px 0">${money(price)}</td>
+    </tr>`;
+  }).join("");
+
+  const dateStr = formatDate(now);
+  const timeStr = formatTime(now);
+
+  const printContent = `
+  <html>
+  <head>
+    <title>Receipt</title>
+    <style>
+      @page { size: 80mm auto; margin: 5mm; }
+      body { font-family: monospace; font-size: 12px; margin: 0; color:#000; }
+      .center { text-align: center; font-weight: bold; }
+      .line { border-top: 1px dashed #000; margin: 6px 0; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 3px 0; vertical-align: top; }
+      .right { text-align: right; }
+      .bold { font-weight: bold; }
+      .unpaid { color: #dc3545; font-weight: bold; text-align: center; margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="center">IDEAL FOOD</div>
+    <div class="center">Invoice: ${escapeHtml(invoiceForThis)}</div>
+    <div class="center">${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</div>
+    <div class="unpaid">UNPAID BILL</div>
+    <div class="line"></div>
+    ${nameHTML}
+    ${phoneHTML}
+    ${addressHTML}
+    ${noteHTML}
+    <div>Order Type: ${escapeHtml(orderType || '')}</div>
+    <div class="line"></div>
+    <table>
+      <tr class="bold"><td>DESCRIPTION</td><td style="width:40px;text-align:center">QTY</td><td style="width:80px;text-align:right">PRICE</td></tr>
+      ${itemsHtml}
+    </table>
+    <div class="line"></div>
+    <div style="display:flex;justify-content:space-between"><div class="muted">Items Subtotal:</div><div>Rs ${money(itemsTotal)}</div></div>
+    ${discountHTML}
+    ${deliveryHTML}
+    <div class="line"></div>
+    <div style="display:flex;justify-content:space-between" class="bold"><div>TOTAL:</div><div>Rs ${money(finalTotal)}</div></div>
+    <div class="line"></div>
+    <div style="text-align:center;font-size:10px;color:#6c757d;margin-top:10px">Bring this bill to counter for payment</div>
+  </body>
+  </html>
+  `;
+
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) return alert("Please allow pop-ups to print.");
+  printWindow.document.write(printContent);
+  printWindow.document.close();
+
+  setTimeout(() => {
+    try { printWindow.focus(); printWindow.print(); } catch (e) { console.warn("print failed", e); }
+    try { printWindow.close(); } catch(e) {}
+  }, 300);
+
+  clearBill();
+}
+
+/* =========================
+   History printing and rendering
+   ========================= */
+function printHistory(index){
+  const entry = historyData[index];
+  if (!entry) return alert("History entry not found.");
+  const items = entry.items || [];
+  const itemsSubtotal = items.reduce((s,i)=> s + (Number(i.price)*Number(i.qty)),0);
+  const discountPercent = Number(entry.discount) || 0;
+  
+  let nonCokeTotal = 0;
+  items.forEach(it => {
+    if (!it.name.toLowerCase().includes('coke')) {
+      nonCokeTotal += (Number(it.qty) || 0) * (Number(it.price) || 0);
+    }
+  });
+  
+  const discountAmount = Math.round(nonCokeTotal * discountPercent / 100);
+
+  const itemsHtml = (items.map(item => {
+    const desc = `${item.name}${item.size && item.size !== 'Deal' ? ' (' + item.size + ')' : ''}`;
+    const qty = Number(item.qty);
+    const price = Number(item.price) * qty;
+    return `<tr>
+      <td style="padding:3px 0">${escapeHtml(desc)}</td>
+      <td style="width:40px;text-align:center;padding:3px 0">${qty}</td>
+      <td style="width:80px;text-align:right;padding:3px 0">${money(price)}</td>
+    </tr>`;
+  })).join("");
+
+  const d = new Date(entry.timestamp || Date.now());
+  const dateStr = formatDate(d);
+  const timeStr = formatTime(d);
+  const customerName = entry.customerName ? `<div>Customer Name: ${escapeHtml(entry.customerName)}</div>` : "";
+  const phone = entry.customerPhone ? `<div>Phone: ${escapeHtml(entry.customerPhone)}</div>` : "";
+  const addr = entry.customerAddress ? `<div>Address: ${escapeHtml(entry.customerAddress)}</div>` : "";
+  const note = entry.customerNote ? `<div>Note: ${escapeHtml(entry.customerNote)}</div>` : "";
+  const discountHTML = discountAmount > 0 ? `<div>Discount: ${money(discountPercent)}% (Rs ${money(discountAmount)})</div>` : "";
+  const deliveryHTML = (entry.deliveryCharge && entry.deliveryCharge > 0) ? `<div>Delivery: Rs ${money(entry.deliveryCharge)}</div>` : "";
+
+  const printContent = `
+  <html>
+  <head>
+    <title>Receipt</title>
+    <style>
+      @page { size: 80mm auto; margin: 5mm; }
+      body { font-family: monospace; font-size: 12px; margin: 0; color:#000; }
+      .center { text-align: center; font-weight: bold; }
+      .line { border-top: 1px dashed #000; margin: 6px 0; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 3px 0; vertical-align: top; }
+    </style>
+  </head>
+  <body>
+    <div class="center">IDEAL FOOD</div>
+    <div class="center">Invoice: ${escapeHtml(entry.invoice || '')}</div>
+    <div class="center">Bill — ${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</div>
+    <div class="line"></div>
+    ${customerName}
+    ${phone}
+    ${addr}
+    ${note}
+    <div>Order Type: ${escapeHtml(entry.orderType || '')}</div>
+    <div class="line"></div>
+    <table>
+      <tr><td>DESCRIPTION</td><td style="width:40px;text-align:center">QTY</td><td style="width:80px;text-align:right">PRICE</td></tr>
+      ${itemsHtml}
+    </table>
+    <div class="line"></div>
+    <div style="display:flex;justify-content:space-between"><div class="muted">Items Subtotal:</div><div>Rs ${money(itemsSubtotal)}</div></div>
+    ${discountHTML}
+    ${deliveryHTML}
+    <div class="line"></div>
+    <div style="display:flex;justify-content:space-between"><div><strong>TOTAL</strong></div><div><strong>Rs ${money(entry.total)}</strong></div></div>
+    <div class="line"></div>
+  </body>
+  </html>
+  `;
+
+  const w = window.open("", "_blank");
+  if (!w) return alert("Please allow pop-ups to print.");
+  w.document.write(printContent);
+  w.document.close();
+  setTimeout(() => {
+    try { w.focus(); w.print(); } catch(e) { console.warn('history print failed', e); }
+    try { w.close(); } catch(e) {}
+  }, 250);
+}
+
+/* =========================
+   HISTORY RENDER - SHOW/HIDE BUTTONS BASED ON PAID STATUS
+   ========================= */
+function renderHistory(){
+  const list = $("#historyList");
+  list.innerHTML = "";
+
+  if(!historyData || historyData.length === 0){
+    list.innerHTML = '<div class="muted">No saved bills yet.</div>';
+    return;
+  }
+
+  historyData.slice().reverse().forEach((h, revIdx) => {
+    const originalIndex = historyData.length - 1 - revIdx;
+    const card = document.createElement("div");
+    card.style.border = "1px solid #eee";
+    card.style.padding = "8px";
+    card.style.marginBottom = "8px";
+    card.style.borderRadius = "6px";
+
+    const when = `${formatDate(h.timestamp)} ${formatTime(h.timestamp)}`;
+    const itemsSummary = (h.items || []).slice(0, 2).map(it => `${it.name}${it.size?` (${it.size})`:''} x${it.qty}`).join(", ");
+    const paidStatus = h.paid ? 
+      `<span class="paid-badge">Paid</span>` : 
+      `<span class="unpaid-badge">Unpaid</span>`;
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>${escapeHtml(h.customerName || 'Customer')}</strong> <span class="muted">Invoice: ${escapeHtml(h.invoice || '')}</span></div>
+        ${paidStatus}
+      </div>
+      <div class="muted" style="margin-top:4px">${escapeHtml(when)}</div>
+      <div class="muted" style="margin-top:6px">${escapeHtml(itemsSummary)}${h.items.length > 2 ? '...' : ''}</div>
+      <div style="font-weight:700;margin-top:6px">Total: Rs ${money(h.total)}</div>
+    `;
+    
+    if (!h.paid) {
+      const buttonContainer = document.createElement("div");
+      buttonContainer.style.display = 'flex';
+      buttonContainer.style.gap = '8px';
+      buttonContainer.style.marginTop = '8px';
+      buttonContainer.innerHTML = `
+        <button class="btn blue" onclick="editBillFromHistory(${originalIndex})">Edit</button>
+        <button class="btn light" onclick="printHistory(${originalIndex})">Print</button>
+        <button class="btn green" onclick="openPaymentModal(${originalIndex})">Collect Payment</button>
+        <button class="btn red" onclick="openDeleteReasonModal(${originalIndex})">Delete</button>
+      `;
+      card.appendChild(buttonContainer);
+    } else {
+      const messageDiv = document.createElement("div");
+      messageDiv.className = "muted";
+      messageDiv.style.marginTop = "8px";
+      messageDiv.style.fontSize = "12px";
+      messageDiv.textContent = "Bill is paid. No actions available.";
+      card.appendChild(messageDiv);
+    }
+    
+    list.appendChild(card);
+  });
+}
+
+/* =========================
+   Payment Modal Functions - FIXED VERSION
+   ========================= */
+function openPaymentModal(index) {
+  const entry = historyData[index];
+  if (!entry) return;
+  
+  currentPaymentIndex = index;
+  $("#paymentTotal").textContent = `Rs ${money(entry.total)}`;
+  $("#amountGiven").value = "";
+  $("#remainingAmount").textContent = `Rs ${money(entry.total)}`;
+  $("#paymentModal").style.display = "flex";
+  
+  // Update the input event handler
+  $("#amountGiven").oninput = function() {
+    const given = Number(this.value) || 0;
+    const total = entry.total;
+    const remaining = given - total;
+    $("#remainingAmount").textContent = `Rs ${money(Math.abs(remaining))} ${remaining >= 0 ? '(Change)' : '(Due)'}`;
+    $("#remainingAmount").style.color = remaining >= 0 ? '#28a745' : '#dc3545';
+  };
+}
+
+function closePaymentModal() {
+  $("#paymentModal").style.display = "none";
+  currentPaymentIndex = null;
+}
+
+function markAsPaid() {
+  const index = currentPaymentIndex;
+  if (index === null || !historyData[index]) return;
+  
+  const amountGiven = Number($("#amountGiven").value) || 0;
+  const entry = historyData[index];
+  
+  // First, record sales for this entry
+  try {
+    adjustSalesForEntry({...entry, paid: true}, +1);
+  } catch (e) {
+    console.warn("Failed to adjust sales on payment", e);
+  }
+  
+  // Update the entry
+  historyData[index].paid = true;
+  historyData[index].amountGiven = amountGiven;
+  historyData[index].paymentTimestamp = Date.now();
+  historyData[index].paymentDate = new Date().toISOString().slice(0, 10);
+  
+  lsSet(LS_KEYS.HISTORY, historyData);
+  
+  renderHistory();
+  closePaymentModal();
+  alert("Payment recorded successfully! Bill marked as paid.");
+}
+
+function markAsUnpaid(index) {
+  if (!historyData[index]) return;
+  
+  if (!confirm("Mark this bill as unpaid? This will remove it from today's sales.")) return;
+  
+  const entry = historyData[index];
+  historyData[index].paid = false;
+  delete historyData[index].amountGiven;
+  delete historyData[index].paymentTimestamp;
+  delete historyData[index].paymentDate;
+  
+  lsSet(LS_KEYS.HISTORY, historyData);
+  
+  // Remove from sales
+  try {
+    adjustSalesForEntry({...entry, paid: true}, -1);
+  } catch (e) {
+    console.warn("Failed to adjust sales on mark as unpaid", e);
+  }
+  
+  renderHistory();
+  alert("Bill marked as unpaid.");
+}
+
+function editBillFromHistory(idx){
+  const entry = historyData[idx];
+  if(!entry) return alert("History item not found.");
+  
+  if (entry.paid) {
+    return alert("Cannot edit paid bills. Mark as unpaid first.");
+  }
+  
+  editingIndex = idx;
+  editingOriginalEntry = JSON.parse(JSON.stringify(entry));
+  bill = JSON.parse(JSON.stringify(entry.items || []));
+  $("#customerName").value = entry.customerName || "";
+  $("#customerPhone").value = entry.customerPhone || "";
+  $("#customerAddress").value = entry.customerAddress || "";
+  $("#customerNote").value = entry.customerNote || "";
+  $("#discount").value = entry.discount || 0;
+  $("#deliveryCharge").value = entry.deliveryCharge || 0;
+  orderType = entry.orderType || "";
+  if(orderType === "Delivery") $("#addressWrap").style.display = "block"; else $("#addressWrap").style.display = "none";
+  updateBill();
+  $("#historyDrawer").style.display = "none";
+}
+
+/* =========================
+   Delete with Reason Modal
+   ========================= */
+function openDeleteReasonModal(index) {
+  const entry = historyData[index];
+  if (entry && entry.paid) {
+    return alert("Cannot delete paid bills.");
+  }
+  
+  currentDeleteIndex = index;
+  $("#deleteReasonText").value = "";
+  $("#deleteReasonModal").style.display = "flex";
+}
+
+function closeDeleteReasonModal() {
+  $("#deleteReasonModal").style.display = "none";
+  currentDeleteIndex = null;
+}
+
+function deleteWithReason() {
+  const idx = currentDeleteIndex;
+  const reason = $("#deleteReasonText").value.trim();
+  
+  if (!reason) {
+    alert("Please provide a reason for deletion.");
+    return;
+  }
+  
+  if(!historyData[idx]) return;
+  
+  // Calculate total of the bill to be deleted
+  let billTotal = historyData[idx].total || 0;
+  
+  const deletionEntry = {
+    timestamp: Date.now(),
+    historyIndex: idx,
+    reason: reason,
+    billData: historyData[idx],
+    deletedBy: adminLoggedIn ? "admin" : "user",
+    customerName: historyData[idx].customerName || "",
+    invoiceNumber: historyData[idx].invoice || "",
+    totalAmount: billTotal,
+    paymentDate: historyData[idx].paymentDate || dayKeyFromTimestamp(historyData[idx].timestamp)
+  };
+  
+  deletionLog.push(deletionEntry);
+  lsSet(LS_KEYS.DELETION_LOG, deletionLog);
+  
+  try {
+    adjustSalesForEntry(historyData[idx], -1);
+  } catch (e) { console.warn('Failed subtracting sales on delete', e); }
+  
+  historyData.splice(idx, 1);
+  lsSet(LS_KEYS.HISTORY, historyData);
+  
+  renderHistory();
+  closeDeleteReasonModal();
+  alert("Bill deleted with reason recorded.");
+}
+
+/* =========================
+   Sales report (by day) with categories and deletion log
+   ========================= */
+function renderSalesReport(){
+  const sel = $("#salesYearSel");
+  let selectedDay = sel?.value;
+  const allDays = Object.keys(salesData || {}).sort().reverse();
+  if (!selectedDay) selectedDay = (allDays.length > 0) ? allDays[0] : (new Date().toISOString().slice(0,10));
+  const box = $("#salesReport");
+  box.innerHTML = `<div class="muted" style="font-weight:bold;margin-bottom:10px">Sales Report for ${selectedDay}</div>`;
+  
+  // Check if there's any sales data
+  if (!salesData || !salesData[selectedDay] || (!salesData[selectedDay].categories && !salesData[selectedDay].special)){
+    box.innerHTML += '<div class="muted">No sales recorded for this day.</div>';
+  }
+  
+  // Process sales data by categories
+  let grandTotal = 0;
+  
+  // Display categories if they exist
+  if (salesData[selectedDay] && salesData[selectedDay].categories) {
+    const categories = Object.keys(salesData[selectedDay].categories).sort();
+    
+    categories.forEach(category => {
+      const catData = salesData[selectedDay].categories[category];
+      const catItems = Object.entries(catData).sort((a,b) => Math.abs(b[1]) - Math.abs(a[1]));
+      
+      let categoryTotal = 0;
+      catItems.forEach(([item, amount]) => {
+        categoryTotal += amount;
+      });
+      grandTotal += categoryTotal;
+      
+      const catDiv = document.createElement('div');
+      catDiv.style.marginTop = '12px';
+      catDiv.style.border = '1px solid #eee';
+      catDiv.style.borderRadius = '6px';
+      catDiv.style.padding = '8px';
+      catDiv.style.backgroundColor = '#f9f9f9';
+      
+      catDiv.innerHTML = `
+        <div style="font-weight:bold;color:var(--brand-dark);margin-bottom:6px;display:flex;justify-content:space-between">
+          <span>${escapeHtml(category)}</span>
+          <span>Rs ${money(categoryTotal)}</span>
+        </div>
+        <div style="max-height:120px;overflow-y:auto;font-size:12px">
+      `;
+      
+      catItems.forEach(([item, amount]) => {
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.justifyContent = 'space-between';
+        row.style.padding = '2px 0';
+        row.style.borderBottom = '1px dashed #eee';
+        row.innerHTML = `
+          <div style="padding-left:8px">${escapeHtml(item)}</div>
+          <div>Rs ${money(amount)}</div>
+        `;
+        catDiv.appendChild(row);
+      });
+      
+      box.appendChild(catDiv);
+    });
+  }
+  
+  // Show special items (Discount, Delivery Charge)
+  if (salesData[selectedDay] && salesData[selectedDay].special) {
+    const specialDiv = document.createElement('div');
+    specialDiv.style.marginTop = '15px';
+    specialDiv.style.borderTop = '2px solid #ddd';
+    specialDiv.style.paddingTop = '10px';
+    
+    Object.entries(salesData[selectedDay].special).forEach(([item, amount]) => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.justifyContent = 'space-between';
+      row.style.padding = '6px 0';
+      row.style.fontWeight = 'bold';
+      row.innerHTML = `
+        <div style="color:${item === "Discount" ? '#dc3545' : '#17a2b8'}">
+          ${escapeHtml(item)}
+        </div>
+        <div style="color:${item === "Discount" ? '#dc3545' : '#17a2b8'}">
+          ${item === "Discount" ? '-' : ''}Rs ${money(Math.abs(amount))}
+        </div>
+      `;
+      grandTotal += amount;
+      specialDiv.appendChild(row);
+    });
+    
+    if (specialDiv.children.length > 0) {
+      box.appendChild(specialDiv);
+    }
+  }
+  
+  // Display Grand Total
+  if (grandTotal !== 0) {
+    const totalDiv = document.createElement('div');
+    totalDiv.style.display = 'flex';
+    totalDiv.style.justifyContent = 'space-between';
+    totalDiv.style.padding = '10px 0';
+    totalDiv.style.borderTop = '2px solid #222';
+    totalDiv.style.marginTop = '15px';
+    totalDiv.style.fontWeight = 'bold';
+    totalDiv.style.fontSize = '14px';
+    totalDiv.innerHTML = `
+      <div>GRAND TOTAL:</div>
+      <div>Rs ${money(grandTotal)}</div>
+    `;
+    box.appendChild(totalDiv);
+  }
+  
+  // Show deletion log for the selected day
+  const deletionsForDay = deletionLog.filter(entry => {
+    return dayKeyFromTimestamp(entry.timestamp) === selectedDay;
+  });
+  
+  if (deletionsForDay.length > 0) {
+    const deletionDiv = document.createElement('div');
+    deletionDiv.style.marginTop = '25px';
+    deletionDiv.style.borderTop = '2px dashed #dc3545';
+    deletionDiv.style.paddingTop = '15px';
+    
+    deletionDiv.innerHTML = `
+      <div style="font-weight:bold;color:#dc3545;margin-bottom:8px;font-size:14px">📋 DELETED BILLS LOG</div>
+      <div style="font-size:11px;color:#666;margin-bottom:12px">Deleted bills with reasons:</div>
+    `;
+    
+    // Create deletion table
+    const table = document.createElement('table');
+    table.style.width = '100%';
+    table.style.borderCollapse = 'collapse';
+    table.style.fontSize = '11px';
+    
+    // Table header
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+      <tr style="background:#f8f9fa;font-weight:bold">
+        <th style="padding:6px;text-align:left;border-bottom:1px solid #ddd">Action</th>
+        <th style="padding:6px;text-align:left;border-bottom:1px solid #ddd">Reason</th>
+        <th style="padding:6px;text-align:right;border-bottom:1px solid #ddd">Amount</th>
+      </tr>
+    `;
+    table.appendChild(thead);
+    
+    // Table body
+    const tbody = document.createElement('tbody');
+    let deletionTotal = 0;
+    
+    deletionsForDay.forEach((entry, index) => {
+      const row = document.createElement('tr');
+      row.style.borderBottom = '1px solid #eee';
+      
+      const action = entry.deletedBy === "admin" ? "ADMIN DELETE" : "DELETE";
+      const reason = entry.reason || "No reason provided";
+      const amount = entry.totalAmount || 0;
+      deletionTotal += amount;
+      
+      row.innerHTML = `
+        <td style="padding:6px;color:#dc3545;font-weight:bold;font-size:10px">${action}</td>
+        <td style="padding:6px">${escapeHtml(reason.length > 30 ? reason.substring(0, 30) + '...' : reason)}</td>
+        <td style="padding:6px;text-align:right;color:#dc3545;font-weight:bold">Rs ${money(amount)}</td>
+      `;
+      tbody.appendChild(row);
+    });
+    
+    table.appendChild(tbody);
+    deletionDiv.appendChild(table);
+    
+    // Deletion total
+    if (deletionsForDay.length > 0) {
+      const totalRow = document.createElement('div');
+      totalRow.style.display = 'flex';
+      totalRow.style.justifyContent = 'space-between';
+      totalRow.style.padding = '8px 0';
+      totalRow.style.borderTop = '1px solid #dc3545';
+      totalRow.style.marginTop = '8px';
+      totalRow.style.fontWeight = 'bold';
+      totalRow.style.color = '#dc3545';
+      totalRow.style.fontSize = '12px';
+      totalRow.innerHTML = `
+        <div>Total Deleted Amount:</div>
+        <div>Rs ${money(deletionTotal)}</div>
+      `;
+      deletionDiv.appendChild(totalRow);
+      
+      // Add info about number of deletions
+      const infoDiv = document.createElement('div');
+      infoDiv.style.fontSize = '10px';
+      infoDiv.style.color = '#999';
+      infoDiv.style.marginTop = '5px';
+      infoDiv.style.textAlign = 'center';
+      infoDiv.textContent = `${deletionsForDay.length} bill${deletionsForDay.length > 1 ? 's' : ''} deleted`;
+      deletionDiv.appendChild(infoDiv);
+    }
+    
+    box.appendChild(deletionDiv);
+  }
+}
+
+/* =========================
+   Admin helpers & selects
+   ========================= */
+function populateAdminSelects(){
+  const removeCategorySel = $("#removeCategorySel"), removeProductSel = $("#removeProductSel"), removeDealSel = $("#removeDealSel");
+  if (removeCategorySel) { removeCategorySel.innerHTML=''; categories.filter(c=>c!=="All Items").forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; removeCategorySel.appendChild(o); }); }
+  if (removeProductSel) { removeProductSel.innerHTML=''; products.forEach((p,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=p.name; removeProductSel.appendChild(o); }); }
+  if (removeDealSel) { removeDealSel.innerHTML=''; deals.forEach((d,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=d.name; removeDealSel.appendChild(o); }); }
+
+  if (removeCategorySel) $("#removeCategoryBtn").disabled = (removeCategorySel.options.length===0);
+  if (removeProductSel) $("#removeProductBtn").disabled = (removeProductSel.options.length===0);
+  if (removeDealSel) $("#removeDealBtn").disabled = (removeDealSel.options.length===0);
+
+  const sSel = $("#salesYearSel");
+  if (sSel){
+    sSel.innerHTML = "";
+    const days = Object.keys(salesData || {}).sort().reverse();
+    if (days.length === 0) {
+      const now = new Date();
+      for (let i=0;i<7;i++){
+        const d = new Date(now); d.setDate(now.getDate() - i);
+        const key = d.toISOString().slice(0,10);
+        const o = document.createElement('option'); o.value = key; o.textContent = key; sSel.appendChild(o);
+      }
+    } else {
+      days.forEach(day => { const o=document.createElement('option'); o.value = day; o.textContent = day; sSel.appendChild(o); });
+    }
+  }
+}
+
+/* =========================
+   Admin actions
+   ========================= */
+function addCategory(){ const name = $("#newCategory").value.trim(); if(!name) return alert("Category name required"); if(categories.includes(name)) return alert("Already exists"); categories.push(name); lsSet(LS_KEYS.CATEGORIES, categories); renderCategories(); populateAdminSelects(); $("#newCategory").value=''; }
+function removeCategory(){ const c = $("#removeCategorySel").value; if(!c) return alert("Select category"); if(!confirm(`Remove ${c} and all its products/deals?`)) return; categories = categories.filter(x=>x!==c); products = products.filter(p=>p.category!==c); deals = deals.filter(d=>d.category!==c); lsSet(LS_KEYS.CATEGORIES, categories); lsSet(LS_KEYS.PRODUCTS, products); lsSet(LS_KEYS.DEALS, deals); renderCategories(); renderProducts(); populateAdminSelects(); }
+function removeProduct(){ const idx = Number($("#removeProductSel").value); if(isNaN(idx)) return alert("Select product"); if(!confirm("Remove product?")) return; products.splice(idx,1); lsSet(LS_KEYS.PRODUCTS, products); renderProducts(); populateAdminSelects(); }
+function removeDeal(){ const idx = Number($("#removeDealSel").value); if(isNaN(idx)) return alert("Select deal"); if(!confirm("Remove deal?")) return; deals.splice(idx,1); lsSet(LS_KEYS.DEALS, deals); renderProducts(); populateAdminSelects(); }
+
+/* =========================
+   Admin login
+   ========================= */
+function adminLogin(){
+  const user = $("#adminName").value.trim(), pass = $("#adminPass").value;
+  if (user === 'admin' && pass === '1234'){
+    adminLoggedIn = true; $("#adminLogin").style.display = 'none'; $("#adminControls").style.display = 'block'; $("#adminMsg").textContent=''; populateAdminSelects(); renderSalesReport();
+    const delBtn = $("#deleteSalesBtn"); if (delBtn) delBtn.style.display = 'block';
+    const pdBtn = $("#printDeleteSalesBtn"); if (pdBtn) pdBtn.style.display = 'block';
+  } else { $("#adminMsg").textContent = 'Invalid credentials'; }
+}
+function adminLogout(){ adminLoggedIn = false; $("#adminLogin").style.display = 'block'; $("#adminControls").style.display = 'none'; $("#adminName").value=''; $("#adminPass").value=''; 
+  const delBtn = $("#deleteSalesBtn"); if (delBtn) delBtn.style.display = 'none';
+  const pdBtn = $("#printDeleteSalesBtn"); if (pdBtn) pdBtn.style.display = 'none';
+}
+
+/* =========================
+   Delete Sales & History
+   ========================= */
+function deleteSalesAndHistory(){
+  if (!adminLoggedIn) return alert("Admin login required.");
+  if (!confirm("This will PERMANENTLY DELETE all saved bill history AND daily sales records. THIS CANNOT BE UNDONE. Type 'DELETE' to confirm.")) {
+    if (!confirm("Are you sure you want to proceed?")) return;
+  }
+  const typed = prompt("To confirm permanent deletion, type DELETE (in uppercase):");
+  if (!typed || typed.trim() !== "DELETE") return alert("Deletion cancelled (confirmation not provided).");
+
+  try {
+    historyData = [];
+    salesData = {};
+    lsSet(LS_KEYS.HISTORY, historyData);
+    lsSet(LS_KEYS.SALES, salesData);
+
+    invoiceCounter = 1;
+    lsSet(LS_KEYS.INVOICE_COUNTER, invoiceCounter);
+
+    renderHistory();
+    renderSalesReport();
+    populateAdminSelects();
+
+    alert("All saved bill history and daily sales records were deleted. Invoice counter reset to 0001.");
+  } catch (e) {
+    console.error("deleteSalesAndHistory failed", e);
+    alert("Delete failed. See console for details.");
+  }
+}
+
+/* =========================
+   Print & Delete Sales
+   ========================= */
+function printAndDeleteSales(){
+  if (!adminLoggedIn) return alert("Admin login required.");
+
+  const sel = $("#salesYearSel");
+  const selectedDay = sel?.value || (new Date().toISOString().slice(0,10));
+  
+  // Get sales data for the selected day
+  const dayData = salesData[selectedDay] || {};
+  const categories = dayData.categories || {};
+  const special = dayData.special || {};
+  
+  if (!confirm(`This will PRINT the sales report for ${selectedDay} and then PERMANENTLY DELETE all saved bill history and daily sales records. This cannot be undone.`)) return;
+  const typed = prompt("To confirm, type DELETE (uppercase):");
+  if (!typed || typed.trim() !== "DELETE") return alert("Cancelled — confirmation not provided.");
+
+  const now = new Date();
+  const printedAt = now.toLocaleString();
+  let bodyHtml = `<div style="text-align:center;font-family:monospace"><h3>Sales Report</h3><div>${escapeHtml(selectedDay)}</div><div style="margin-bottom:8px">${escapeHtml(printedAt)}</div><hr></div>`;
+
+  if (Object.keys(categories).length === 0 && Object.keys(special).length === 0){
+    bodyHtml += `<div style="font-family:monospace">No sales recorded for ${escapeHtml(selectedDay)}.</div>`;
+  } else {
+    // Add categories
+    Object.keys(categories).sort().forEach(category => {
+      const catData = categories[category];
+      bodyHtml += `<div style="font-family:monospace;margin-top:10px;font-weight:bold">${escapeHtml(category)}</div>`;
+      Object.entries(catData).forEach(([item, amount]) => {
+        bodyHtml += `<div style="font-family:monospace;display:flex;justify-content:space-between">
+          <div style="padding-left:10px">${escapeHtml(item)}</div>
+          <div>Rs ${money(amount)}</div>
+        </div>`;
+      });
+    });
+    
+    // Add special items
+    if (Object.keys(special).length > 0) {
+      bodyHtml += `<div style="font-family:monospace;margin-top:10px;border-top:1px dashed #000;padding-top:10px">`;
+      Object.entries(special).forEach(([item, amount]) => {
+        bodyHtml += `<div style="font-family:monospace;display:flex;justify-content:space-between;font-weight:bold;color:${item === "Discount" ? '#dc3545' : '#17a2b8'}">
+          <div>${escapeHtml(item)}</div>
+          <div>${item === "Discount" ? '-' : ''}Rs ${money(Math.abs(amount))}</div>
+        </div>`;
+      });
+      bodyHtml += `</div>`;
+    }
+    
+    // Calculate and add total
+    let total = 0;
+    Object.values(categories).forEach(cat => {
+      Object.values(cat).forEach(amount => total += amount);
+    });
+    Object.values(special).forEach(amount => total += amount);
+    
+    bodyHtml += `<hr><div style="display:flex;justify-content:space-between;font-family:monospace;font-weight:bold;margin-top:10px"><div>Total</div><div>Rs ${money(total)}</div></div>`;
+  }
+
+  const printContent = `<!doctype html><html><head><meta charset="utf-8"><title>Sales Report ${selectedDay}</title>
+    <style>
+      @page { size: 80mm auto; margin: 5mm; }
+      body { font-family: monospace; font-size: 11px; color:#000; margin:6px; }
+    </style></head><body>${bodyHtml}</body></html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) return alert("Please allow pop-ups to print.");
+  w.document.write(printContent);
+  w.document.close();
+
+  setTimeout(() => {
+    try {
+      w.focus();
+      w.print();
+      try { w.close(); } catch(e){}
+    } catch (e) {
+      console.warn("Print call failed:", e);
+    }
+
+    try {
+      historyData = [];
+      salesData = {};
+      lsSet(LS_KEYS.HISTORY, historyData);
+      lsSet(LS_KEYS.SALES, salesData);
+
+      invoiceCounter = 1;
+      lsSet(LS_KEYS.INVOICE_COUNTER, invoiceCounter);
+
+      renderHistory();
+      renderSalesReport();
+      populateAdminSelects();
+
+      alert(`Sales printed for ${selectedDay} and all saved bill history & sales records have been deleted. Invoice counter reset to 0001.`);
+    } catch (e) {
+      console.error("printAndDeleteSales deletion failed:", e);
+      alert("Print succeeded but deletion failed — check console.");
+    }
+  }, 300);
+}
+
+/* =========================
+   Wiring & initialization - FIXED EVENT HANDLERS
+   ========================= */
+window.addEventListener('load', async () => {
+  try {
+    if (!categories || categories.length === 0) categories = seedCategories.slice();
+    renderCategories(); renderProducts(); renderHistory(); populateAdminSelects();
+
+    try {
+      await idbOpen();
+      for (let i=0;i<products.length;i++){
+        const p = products[i];
+        if (p && p.img && String(p.img).startsWith('data:')){
+          if (String(p.img).length > 30000){
+            try {
+              const blob = dataURLToBlob(p.img);
+              const id = await idbPutImage(blob);
+              products[i].img = 'idb://' + id;
+              console.log('Migrated product image to IndexedDB id', id, 'for', products[i].name);
+            } catch (e) {
+              console.warn('Failed migrating image for product', p.name, e);
+            }
+          }
+        }
+      }
+      lsSet(LS_KEYS.PRODUCTS, products);
+
+      await loadMetaFromIDB();
+
+      renderCategories(); renderProducts(); renderHistory(); populateAdminSelects();
+
+    } catch (err) {
+      console.warn('IndexedDB initialization/migration failed', err);
+    }
+
+    const attach = (sel, ev, fn) => {
+      const el = document.querySelector(sel);
+      if (!el) { console.warn(`attach: element ${sel} not found; skipping ${ev}`); return; }
+      el.addEventListener(ev, fn);
+    };
+
+    attach('#showAllBtn', 'click', () => {
+      currentCategory = "All Items";
+      const si = document.querySelector('#searchInput'); if (si) si.value = "";
+      try { renderCategories(); renderProducts(); } catch(e) { console.error(e); }
+    });
+
+    attach('#historyBtn', 'click', () => { const d = document.querySelector('#historyDrawer'); if (d) d.style.display = 'block'; });
+    attach('#closeHistory', 'click', () => { const d = document.querySelector('#historyDrawer'); if (d) d.style.display = 'none'; });
+    attach('#adminToggle', 'click', () => { const panel = document.querySelector('#adminPanel'); if (!panel) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
+    attach('#clearBillBtn', 'click', () => { try { clearBill(); } catch(e) { console.error(e); } });
+
+    attach('#printBtn', 'click', () => { try { printBill(); } catch(e) { console.error(e); } });
+
+    // FIXED: Updated payment modal handlers
+    attach('#cancelPaymentBtn', 'click', closePaymentModal);
+    attach('#confirmPaymentBtn', 'click', markAsPaid); // Fixed: directly calls markAsPaid()
+    
+    attach('#cancelDeleteBtn', 'click', closeDeleteReasonModal);
+    attach('#confirmDeleteBtn', 'click', deleteWithReason);
+
+    if (document.querySelector('#adminLoginBtn')) attach('#adminLoginBtn', 'click', adminLogin);
+    if (document.querySelector('#adminLogoutBtn')) attach('#adminLogoutBtn', 'click', adminLogout);
+    if (document.querySelector('#addCategoryBtn')) attach('#addCategoryBtn', 'click', addCategory);
+    if (document.querySelector('#addProductBtn')) attach('#addProductBtn', 'click', addProduct);
+    if (document.querySelector('#addCustomProductBtn')) attach('#addCustomProductBtn', 'click', addCustomProduct);
+    if (document.querySelector('#addDealBtn')) attach('#addDealBtn', 'click', addDeal);
+    if (document.querySelector('#removeCategoryBtn')) attach('#removeCategoryBtn', 'click', removeCategory);
+    if (document.querySelector('#removeProductBtn')) attach('#removeProductBtn', 'click', removeProduct);
+    if (document.querySelector('#removeDealBtn')) attach('#removeDealBtn', 'click', removeDeal);
+    if (document.querySelector('#showSalesBtn')) attach('#showSalesBtn', 'click', renderSalesReport);
+
+    if (document.querySelector('#deleteSalesBtn')) attach('#deleteSalesBtn', 'click', deleteSalesAndHistory);
+    if (document.querySelector('#printDeleteSalesBtn')) attach('#printDeleteSalesBtn', 'click', printAndDeleteSales);
+
+    $$(".order-type").forEach(btn => btn.addEventListener('click', function(){ 
+      orderType = this.dataset.ordertype; 
+      $$(".order-type").forEach(b => b.classList.remove('active')); 
+      this.classList.add('active'); 
+      $("#addressWrap").style.display = (orderType === 'Delivery') ? 'block' : 'none'; 
+    }));
+
+    const nameEl = document.querySelector('#customerName');
+    if (nameEl) nameEl.addEventListener('input', () => {
+      const name = nameEl.value.trim();
+      if (name && addressBook && addressBook.byName && addressBook.byName[name]){
+        const rec = addressBook.byName[name];
+        $("#customerPhone").value = rec.phone || "";
+        $("#customerAddress").value = rec.address || "";
+        $("#deliveryCharge").value = rec.deliveryCharge || "";
+      }
+    });
+
+    const phoneEl = document.querySelector('#customerPhone');
+    if (phoneEl) phoneEl.addEventListener('input', () => {
+      const v = phoneEl.value.trim();
+      if (v && addressBook && addressBook.byPhone && addressBook.byPhone[v]){
+        const name = addressBook.byPhone[v];
+        const rec = (addressBook.byName && addressBook.byName[name]) ? addressBook.byName[name] : null;
+        if (rec){
+          $("#customerName").value = name || "";
+          $("#customerAddress").value = rec.address || "";
+          $("#deliveryCharge").value = rec.deliveryCharge || "";
+        } else {
+          $("#customerAddress").value = "";
+        }
+      }
+    });
+
+    const disc = document.querySelector('#discount'); if (disc) disc.addEventListener('input', updateBill);
+    const del = document.querySelector('#deliveryCharge'); if (del) del.addEventListener('input', updateBill);
+
+    const backdrop = document.querySelector('#modalBackdrop');
+    if (backdrop) backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeEditModal(); });
+
+    populateAdminSelects();
+
+    console.log('POS init complete — all enhancements loaded');
+  } catch (err) {
+    console.error('POS init error', err);
+  }
+});
+
+function clearBill(){
+  bill = []; updateBill();
+  $("#customerName").value=''; $("#customerPhone").value=''; $("#customerAddress").value=''; $("#customerNote").value=''; $("#discount").value=''; $("#deliveryCharge").value='';
+  orderType = ''; $$(".order-type").forEach(b => b.classList.remove('active')); $("#addressWrap").style.display = 'none';
+}
+
+function dataURLToBlob(dataURL) {
+  const parts = dataURL.split(',');
+  const mime = parts[0].match(/:(.*?);/)[1];
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+}
+</script>
+</body>
+</html>
